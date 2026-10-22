@@ -40,8 +40,6 @@ int usuario_valido(const char *s)
     }
     return 1;
 }
-
-/* canal: 1 a 32 caracteres [a-z0-9_-] */
 int canal_valido(const char *s)
 {
     size_t n = strlen(s);

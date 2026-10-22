@@ -1,6 +1,4 @@
-# Imagem usada pelo broker e pelo cliente/servidor em Python
-# (mesma base das aulas: python alpine + pyzmq; protobuf compilado com grpc_tools
-# como na aula de RPC)
+
 FROM python:3.13.7-alpine3.21
 
 WORKDIR /app

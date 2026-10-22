@@ -1,5 +1,4 @@
-/* Bot (cliente) em C: faz login, lista os canais e cria canais novos
- * enviando requisições ao servidor através do broker (REQ). */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +14,6 @@ static const char *SUGESTOES_CANAIS[] = {"geral", "noticias", "esportes", "music
                                          "filmes", "tecnologia", "ciencia", "memes", "off-topic"};
 #define N_SUGESTOES (sizeof SUGESTOES_CANAIS / sizeof SUGESTOES_CANAIS[0])
 
-/* Envia uma requisição e espera a resposta. Quem chama libera a resposta. */
 static Resposta *requisitar(const char *operacao, const char *canal)
 {
     Requisicao req = REQUISICAO__INIT;
@@ -39,7 +37,7 @@ static Resposta *requisitar(const char *operacao, const char *canal)
 
     if (!resp) {
         fprintf(stderr, "%s: resposta mal formada\n", NOME);
-        return resposta__unpack(NULL, 0, (const uint8_t *)""); /* resposta vazia = erro */
+        return resposta__unpack(NULL, 0, (const uint8_t *)"");
     }
     mostrar_resposta(NOME, "<<< RECEBIDO", resp);
     return resp;
@@ -52,7 +50,6 @@ static void liberar(Resposta *r)
 
 static void fazer_login(void)
 {
-    /* Em caso de erro o login é repetido até funcionar */
     while (1) {
         Resposta *r = requisitar("login", "");
         int ok = r->sucesso;
@@ -71,7 +68,6 @@ int main(void)
     snprintf(NOME, sizeof NOME, "%s", env_ou_padrao("NOME", host));
     const char *broker = env_ou_padrao("BROKER", "tcp://broker:5555");
 
-    /* semente diferente para cada bot (todos os containers têm PID 1) */
     unsigned int semente = (unsigned int)agora_ms();
     for (const char *p = NOME; *p; p++) semente = semente * 31 + (unsigned char)*p;
     srand(semente);
@@ -87,10 +83,6 @@ int main(void)
         Resposta *lista = requisitar("listar_canais", "");
         size_t n = lista->n_canais;
         liberar(lista);
-
-        /* Critério para criar canal: existem menos de 5 canais.
-         * O nome é sorteado de uma lista de sugestões; às vezes o canal já
-         * existe e o servidor responde com erro (tratado sem interromper o bot). */
         if (n < 5) liberar(requisitar("criar_canal", SUGESTOES_CANAIS[rand() % N_SUGESTOES]));
 
         usleep(2000000 + (rand() % 2000) * 1000);

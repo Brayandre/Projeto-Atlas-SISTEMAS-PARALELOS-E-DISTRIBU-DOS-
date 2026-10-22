@@ -1,5 +1,4 @@
-# Bot (cliente) em Python: faz login, lista os canais e cria canais novos
-# enviando requisições ao servidor através do broker (REQ).
+
 import os
 import random
 import socket
@@ -33,7 +32,6 @@ def requisitar(operacao, canal=""):
 
 
 def fazer_login():
-    # Em caso de erro o login é repetido até funcionar
     while not requisitar("login").sucesso:
         time.sleep(1)
 
@@ -44,10 +42,6 @@ def main():
 
     while True:
         canais = list(requisitar("listar_canais").canais)
-
-        # Critério para criar canal: existem menos de 5 canais.
-        # O nome é sorteado de uma lista de sugestões; às vezes o canal já
-        # existe e o servidor responde com erro (tratado sem interromper o bot).
         if len(canais) < 5:
             requisitar("criar_canal", random.choice(SUGESTOES_CANAIS))
 

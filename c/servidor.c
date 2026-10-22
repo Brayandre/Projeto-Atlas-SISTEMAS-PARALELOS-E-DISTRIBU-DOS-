@@ -1,5 +1,4 @@
-/* Servidor em C: recebe as requisições dos bots pelo broker (REP),
- * responde e persiste os dados em disco (pasta própria de cada servidor). */
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,10 +13,8 @@ static char NOME[64];
 static char ARQ_LOGINS[512];
 static char ARQ_CANAIS[512];
 
-static char canais[MAX_CANAIS][TAM_NOME]; /* canais conhecidos por este servidor */
+static char canais[MAX_CANAIS][TAM_NOME]; 
 static size_t n_canais = 0;
-
-/* ------------------------------------------------------------ persistência */
 static int canal_existe(const char *nome)
 {
     for (size_t i = 0; i < n_canais; i++)
@@ -40,7 +37,6 @@ static void carregar_canais(void)
     if (!f) return;
     char linha[1024];
     while (fgets(linha, sizeof linha, f)) {
-        /* colunas: timestamp \t data \t canal \t criador */
         linha[strcspn(linha, "\n")] = '\0';
         char *col = strtok(linha, "\t");
         for (int i = 0; col && i < 2; i++) col = strtok(NULL, "\t");
@@ -49,7 +45,6 @@ static void carregar_canais(void)
     fclose(f);
 }
 
-/* cria a pasta de dados (equivalente a mkdir -p) */
 static void criar_pasta(const char *caminho)
 {
     char tmp[512];
@@ -82,7 +77,6 @@ static int salvar_canal(const Requisicao *r)
     return 1;
 }
 
-/* ---------------------------------------------------------------- operações */
 static void op_login(const Requisicao *req, Resposta *resp)
 {
     if (!usuario_valido(req->usuario)) { resp->erro = "nome de usuario invalido"; return; }
@@ -146,7 +140,6 @@ int main(void)
         resp.servidor = NOME;
 
         if (!req) {
-            /* mensagem mal formada: o REP precisa responder mesmo assim */
             resp.operacao = "desconhecida";
             resp.erro = "requisicao invalida";
         } else {

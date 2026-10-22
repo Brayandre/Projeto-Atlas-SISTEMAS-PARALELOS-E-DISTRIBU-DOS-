@@ -1,5 +1,4 @@
-# Funções comuns ao cliente e ao servidor em Python:
-# relógio, validação de nomes e exibição formatada das mensagens.
+
 import re
 import time
 from datetime import datetime

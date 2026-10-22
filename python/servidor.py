@@ -1,5 +1,4 @@
-# Servidor em Python: recebe as requisições dos bots pelo broker (REP),
-# responde e persiste os dados em disco (pasta própria de cada servidor).
+
 import os
 import socket
 
@@ -15,10 +14,8 @@ DADOS = os.environ.get("DADOS", "/data")
 ARQ_LOGINS = os.path.join(DADOS, "logins.tsv")
 ARQ_CANAIS = os.path.join(DADOS, "canais.tsv")
 
-canais = []  # canais conhecidos por este servidor (ordem de criação)
+canais = []
 
-
-# ---------------------------------------------------------------- persistência
 def anexar(arquivo, *colunas):
     with open(arquivo, "a", encoding="utf-8") as f:
         f.write("\t".join(str(c) for c in colunas) + "\n")
@@ -34,7 +31,6 @@ def carregar_canais():
                 canais.append(partes[2])
 
 
-# ---------------------------------------------------------------- operações
 def login(req, resp):
     if not RE_USUARIO.match(req.usuario):
         resp.erro = "nome de usuario invalido"
@@ -89,7 +85,7 @@ def main():
                 resp.erro = "operacao desconhecida"
             else:
                 operacao(req, resp)
-        except Exception as e:  # mensagem mal formada: o REP precisa responder mesmo assim
+        except Exception as e:
             resp.operacao = req.operacao or "desconhecida"
             resp.sucesso = False
             resp.erro = f"requisicao invalida ({e})"

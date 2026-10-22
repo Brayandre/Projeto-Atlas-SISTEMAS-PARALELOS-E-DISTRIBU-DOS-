@@ -117,14 +117,14 @@ Clientes e servidores mostram cada mensagem enviada ou recebida em uma linha com
 
 ```
 ├── docker-compose.yaml
-├── proto/mensagens.proto      # formato das mensagens (Protobuf)
-├── broker/broker.py           # broker REQ-REP (ROUTER/DEALER)
-├── python/                    # Python (Brayan)
-│   ├── Dockerfile             # imagem do broker e do cliente/servidor Python
+├── proto/mensagens.proto     
+├── broker/broker.py          
+├── python/                 
+│   ├── Dockerfile            
 │   ├── comum.py
 │   ├── servidor.py
 │   └── cliente.py
-└── c/                         # C (Gustavo)
+└── c/                      
     ├── Dockerfile
     ├── Makefile
     ├── comum.h / comum.c
