@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+// Formato das mensagens trocadas entre bots (clientes) e servidores.
+// Serializado em binário com Protocol Buffers (visto na aula de RPC).
+// Todas as mensagens possuem o timestamp do envio (ms desde 1970-01-01 UTC).
+
+// Requisição enviada pelo bot ao servidor (REQ -> broker -> REP)
+message Requisicao {
+  string operacao  = 1;  // "login" | "criar_canal" | "listar_canais"
+  string usuario   = 2;  // nome do bot que faz a requisição
+  string canal     = 3;  // usado em "criar_canal"
+  int64  timestamp = 4;  // momento do envio
+}
+
+// Resposta enviada pelo servidor ao bot (REP -> broker -> REQ)
+message Resposta {
+  string operacao        = 1;  // mesma operação da requisição
+  bool   sucesso         = 2;  // true = OK, false = erro
+  string erro            = 3;  // descrição do erro (vazio quando sucesso)
+  repeated string canais = 4;  // lista de canais ("listar_canais")
+  string servidor        = 5;  // nome do servidor que respondeu
+  int64  timestamp       = 6;  // momento do envio
+}
