@@ -1,0 +1,7 @@
+dados/
+__pycache__/
+*_pb2.py
+*.pb-c.c
+*.pb-c.h
+c/servidor
+c/cliente

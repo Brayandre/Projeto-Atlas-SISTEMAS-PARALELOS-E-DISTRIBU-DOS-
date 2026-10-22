@@ -1,0 +1,119 @@
+# Projeto Atlas - Parte 1
+# 1 broker + 2 servidores e 2 clientes por integrante (Python e C)
+# Execução: docker compose up --build
+
+x-python: &python
+  build:
+    context: .
+    dockerfile: python/Dockerfile
+  image: atlas:python
+
+x-c: &c
+  build:
+    context: .
+    dockerfile: c/Dockerfile
+  image: atlas:c
+
+services:
+
+  broker:
+    <<: *python
+    container_name: broker
+    command: ["python", "-u", "broker.py"]
+    ports:
+      - 5555:5555
+      - 5556:5556
+
+  # ---------------------------------------------------------------- servidores
+  servidor_py_1:
+    <<: *python
+    container_name: servidor_py_1
+    command: ["python", "-u", "servidor.py"]
+    environment:
+      NOME: servidor_py_1
+    volumes:
+      - ./dados/servidor_py_1:/data
+    depends_on:
+      - broker
+
+  servidor_py_2:
+    <<: *python
+    container_name: servidor_py_2
+    command: ["python", "-u", "servidor.py"]
+    environment:
+      NOME: servidor_py_2
+    volumes:
+      - ./dados/servidor_py_2:/data
+    depends_on:
+      - broker
+
+  servidor_c_1:
+    <<: *c
+    container_name: servidor_c_1
+    command: ["./servidor"]
+    environment:
+      NOME: servidor_c_1
+    volumes:
+      - ./dados/servidor_c_1:/data
+    depends_on:
+      - broker
+
+  servidor_c_2:
+    <<: *c
+    container_name: servidor_c_2
+    command: ["./servidor"]
+    environment:
+      NOME: servidor_c_2
+    volumes:
+      - ./dados/servidor_c_2:/data
+    depends_on:
+      - broker
+
+  # ------------------------------------------------------------------ clientes
+  cliente_py_1:
+    <<: *python
+    container_name: cliente_py_1
+    command: ["python", "-u", "cliente.py"]
+    environment:
+      NOME: bot_py_1
+    depends_on:
+      - servidor_py_1
+      - servidor_py_2
+      - servidor_c_1
+      - servidor_c_2
+
+  cliente_py_2:
+    <<: *python
+    container_name: cliente_py_2
+    command: ["python", "-u", "cliente.py"]
+    environment:
+      NOME: bot_py_2
+    depends_on:
+      - servidor_py_1
+      - servidor_py_2
+      - servidor_c_1
+      - servidor_c_2
+
+  cliente_c_1:
+    <<: *c
+    container_name: cliente_c_1
+    command: ["./cliente"]
+    environment:
+      NOME: bot_c_1
+    depends_on:
+      - servidor_py_1
+      - servidor_py_2
+      - servidor_c_1
+      - servidor_c_2
+
+  cliente_c_2:
+    <<: *c
+    container_name: cliente_c_2
+    command: ["./cliente"]
+    environment:
+      NOME: bot_c_2
+    depends_on:
+      - servidor_py_1
+      - servidor_py_2
+      - servidor_c_1
+      - servidor_c_2
