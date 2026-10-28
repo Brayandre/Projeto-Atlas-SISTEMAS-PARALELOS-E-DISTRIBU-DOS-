@@ -1,23 +1,32 @@
 syntax = "proto3";
 
-// Formato das mensagens trocadas entre bots (clientes) e servidores.
-// Serializado em binário com Protocol Buffers (visto na aula de RPC).
-// Todas as mensagens possuem o timestamp do envio (ms desde 1970-01-01 UTC).
+// Formato das mensagens trocadas entre clientes e servidores.
 
-// Requisição enviada pelo bot ao servidor (REQ -> broker -> REP)
+// Requisição enviada pelo cliente ao servidor (REQ -> broker -> REP)
 message Requisicao {
-  string operacao  = 1;  // "login" | "criar_canal" | "listar_canais"
-  string usuario   = 2;  // nome do bot que faz a requisição
-  string canal     = 3;  // usado em "criar_canal"
+  string operacao  = 1;  // "login" | "criar_canal" | "listar_canais" | "publicar"
+  string usuario   = 2;  // nome do cliente que faz a requisição
+  string canal     = 3;  // usado em "criar_canal" e "publicar"
   int64  timestamp = 4;  // momento do envio
+  string mensagem  = 5;  // "publicar"
 }
 
 // Resposta enviada pelo servidor ao bot (REP -> broker -> REQ)
 message Resposta {
-  string operacao        = 1;  // mesma operação da requisição
+  string operacao        = 1;  // mesm operação da requisição
   bool   sucesso         = 2;  // true = OK, false = erro
-  string erro            = 3;  // descrição do erro (vazio quando sucesso)
-  repeated string canais = 4;  // lista de canais ("listar_canais")
+  string erro            = 3;  // descrição do erro 
+  repeated string canais = 4;  // "listar_canais"
   string servidor        = 5;  // nome do servidor que respondeu
   int64  timestamp       = 6;  // momento do envio
+}
+
+// Publicação PUB -> proxy -> SUB.
+// Mensagem ZeroMQ em 2 partes: nome do canal e Publicacao
+message Publicacao {
+  string canal     = 1;  // canal (tópico) da publicação
+  string usuario   = 2;  // bot que pediu a publicação
+  string mensagem  = 3;  // texto publicado
+  string servidor  = 4;  // servidor que publicou
+  int64  timestamp = 5;  // momento do envio da publicação
 }

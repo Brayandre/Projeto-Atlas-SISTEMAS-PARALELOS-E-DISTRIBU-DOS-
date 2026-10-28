@@ -12,9 +12,13 @@
 static char NOME[64];
 static char ARQ_LOGINS[512];
 static char ARQ_CANAIS[512];
+static char ARQ_PUBLICACOES[512];
+static void *pub_socket;
+#define TAM_MAX_MENSAGEM 500
 
 static char canais[MAX_CANAIS][TAM_NOME]; 
 static size_t n_canais = 0;
+
 static int canal_existe(const char *nome)
 {
     for (size_t i = 0; i < n_canais; i++)
@@ -66,17 +70,32 @@ static int salvar_login(const Requisicao *r)
     return 1;
 }
 
-static int salvar_canal(const Requisicao *r)
+static int salvar_canal(const Requisicao *r, const char *criador)
 {
     char ts[32];
     fmt_ts(r->timestamp, ts, sizeof ts);
     FILE *f = fopen(ARQ_CANAIS, "a");
     if (!f) { perror("canais"); return 0; }
-    fprintf(f, "%lld\t%s\t%s\t%s\n", (long long)r->timestamp, ts, r->canal, r->usuario);
+    fprintf(f, "%lld\t%s\t%s\t%s\n", (long long)r->timestamp, ts, r->canal, criador);
     fclose(f);
     return 1;
 }
 
+static int salvar_publicacao(const Publicacao *p, int64_t ts_requisicao)
+{
+    char ts[32];
+    fmt_ts(p->timestamp, ts, sizeof ts);
+    FILE *f = fopen(ARQ_PUBLICACOES, "a");
+    if (!f) { perror("publicacoes"); return 0; }
+    fprintf(f, "%lld\t%s\t%lld\t%s\t%s\t", (long long)p->timestamp, ts,
+            (long long)ts_requisicao, p->canal, p->usuario);
+    /* TAB e quebras de linha são separadores do arquivo TSV */
+    for (const char *c = p->mensagem; *c; c++)
+        fputc((*c == '\t' || *c == '\n' || *c == '\r') ? ' ' : *c, f);
+    fputc('\n', f);
+    fclose(f);
+    return 1;
+}
 static void op_login(const Requisicao *req, Resposta *resp)
 {
     if (!usuario_valido(req->usuario)) { resp->erro = "nome de usuario invalido"; return; }
@@ -90,10 +109,43 @@ static void op_criar_canal(const Requisicao *req, Resposta *resp)
     else if (canal_existe(req->canal))  resp->erro = "canal ja existe";
     else {
         if (n_canais >= MAX_CANAIS) { resp->erro = "limite de canais atingido"; return; }
-        if (!salvar_canal(req)) { resp->erro = "falha ao gravar canal"; return; }
+        if (!salvar_canal(req, req->usuario)) { resp->erro = "falha ao gravar canal"; return; }
         adicionar_canal(req->canal);
         resp->sucesso = 1;
     }
+}
+
+static void op_publicar(const Requisicao *req, Resposta *resp)
+{
+    if (!canal_valido(req->canal))              { resp->erro = "nome de canal invalido"; return; }
+    const char *m = req->mensagem;
+    while (*m == ' ') m++;
+    if (*m == '\0')                             { resp->erro = "mensagem vazia"; return; }
+    if (strlen(req->mensagem) > TAM_MAX_MENSAGEM) { resp->erro = "mensagem muito longa"; return; }
+
+    if (!canal_existe(req->canal)) {
+        if (n_canais >= MAX_CANAIS) { resp->erro = "limite de canais atingido"; return; }
+        adicionar_canal(req->canal);
+        salvar_canal(req, "(via publicacao)");
+    }
+
+    Publicacao pub = PUBLICACAO__INIT;
+    pub.canal = req->canal;
+    pub.usuario = req->usuario;
+    pub.mensagem = req->mensagem;
+    pub.servidor = NOME;
+    pub.timestamp = agora_ms();
+
+    size_t tam = publicacao__get_packed_size(&pub);
+    uint8_t *buf = malloc(tam ? tam : 1);
+    publicacao__pack(&pub, buf);
+    zmq_send(pub_socket, pub.canal, strlen(pub.canal), ZMQ_SNDMORE);
+    zmq_send(pub_socket, buf, tam, 0);
+    free(buf);
+    mostrar_publicacao(NOME, ">>> ENVIADO ", &pub, -1);
+
+    if (!salvar_publicacao(&pub, req->timestamp)) { resp->erro = "falha ao gravar publicacao"; return; }
+    resp->sucesso = 1;
 }
 
 static char *lista_canais[MAX_CANAIS];
@@ -115,18 +167,22 @@ int main(void)
     gethostname(host, sizeof host);
     snprintf(NOME, sizeof NOME, "%s", env_ou_padrao("NOME", host));
     const char *broker = env_ou_padrao("BROKER", "tcp://broker:5556");
+    const char *proxy = env_ou_padrao("PROXY", "tcp://proxy:5557");
     const char *dados = env_ou_padrao("DADOS", "/data");
 
     criar_pasta(dados);
     snprintf(ARQ_LOGINS, sizeof ARQ_LOGINS, "%s/logins.tsv", dados);
     snprintf(ARQ_CANAIS, sizeof ARQ_CANAIS, "%s/canais.tsv", dados);
+    snprintf(ARQ_PUBLICACOES, sizeof ARQ_PUBLICACOES, "%s/publicacoes.tsv", dados);
     carregar_canais();
 
     void *ctx = zmq_ctx_new();
     void *rep = zmq_socket(ctx, ZMQ_REP);
     zmq_connect(rep, broker);
-    printf("%s: servidor C conectado ao broker %s | dados em %s | %zu canais carregados\n",
-           NOME, broker, dados, n_canais);
+    pub_socket = zmq_socket(ctx, ZMQ_PUB);
+    zmq_connect(pub_socket, proxy);
+    printf("%s: servidor C conectado ao broker %s e ao proxy %s | dados em %s | %zu canais carregados\n",
+           NOME, broker, proxy, dados, n_canais);
 
     while (1) {
         zmq_msg_t msg;
@@ -148,6 +204,7 @@ int main(void)
             if (strcmp(req->operacao, "login") == 0)              op_login(req, &resp);
             else if (strcmp(req->operacao, "criar_canal") == 0)   op_criar_canal(req, &resp);
             else if (strcmp(req->operacao, "listar_canais") == 0) op_listar_canais(req, &resp);
+            else if (strcmp(req->operacao, "publicar") == 0)      op_publicar(req, &resp);
             else resp.erro = "operacao desconhecida";
         }
 
@@ -162,6 +219,7 @@ int main(void)
         if (req) requisicao__free_unpacked(req, NULL);
     }
 
+    zmq_close(pub_socket);
     zmq_close(rep);
     zmq_ctx_destroy(ctx);
     return 0;

@@ -27,7 +27,6 @@ const char *env_ou_padrao(const char *var, const char *padrao)
     return (v && *v) ? v : padrao;
 }
 
-/* usuário: 1 a 32 caracteres [A-Za-z0-9_-] */
 int usuario_valido(const char *s)
 {
     size_t n = strlen(s);
@@ -40,6 +39,7 @@ int usuario_valido(const char *s)
     }
     return 1;
 }
+
 int canal_valido(const char *s)
 {
     size_t n = strlen(s);
@@ -66,6 +66,7 @@ void mostrar_requisicao(const char *quem, const char *direcao, const Requisicao 
     cabecalho(quem, direcao, "REQ");
     printf("operacao: %s, usuario: %s", r->operacao, r->usuario);
     if (r->canal && *r->canal) printf(", canal: %s", r->canal);
+    if (r->mensagem && *r->mensagem) printf(", mensagem: \"%s\"", r->mensagem);
     printf(", timestamp: %s}\n", ts);
     fflush(stdout);
 }
@@ -84,5 +85,20 @@ void mostrar_resposta(const char *quem, const char *direcao, const Resposta *r)
         printf("]");
     }
     printf(", servidor: %s, timestamp: %s}\n", r->servidor, ts);
+    fflush(stdout);
+}
+
+void mostrar_publicacao(const char *quem, const char *direcao, const Publicacao *p, int64_t recebido_ms)
+{
+    char ts[32];
+    fmt_ts(p->timestamp, ts, sizeof ts);
+    cabecalho(quem, direcao, "PUB");
+    printf("canal: %s, usuario: %s, mensagem: \"%s\", servidor: %s, enviado: %s",
+           p->canal, p->usuario, p->mensagem, p->servidor, ts);
+    if (recebido_ms >= 0) {
+        fmt_ts(recebido_ms, ts, sizeof ts);
+        printf(", recebido: %s", ts);
+    }
+    printf("}\n");
     fflush(stdout);
 }

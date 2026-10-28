@@ -1,3 +1,6 @@
+# Projeto Atlas - Parte 2
+# 1 broker + 1 proxy + 2 servidores e 2 clientes por integrante (Python e C)
+# Execução: docker compose up --build
 
 x-python: &python
   build:
@@ -21,6 +24,14 @@ services:
       - 5555:5555
       - 5556:5556
 
+  proxy:
+    <<: *python
+    container_name: proxy
+    command: ["python", "-u", "proxy.py"]
+    ports:
+      - 5557:5557
+      - 5558:5558
+
   # ---------------------------------------------------------------- servidores
   servidor_py_1:
     <<: *python
@@ -32,6 +43,7 @@ services:
       - ./dados/servidor_py_1:/data
     depends_on:
       - broker
+      - proxy
 
   servidor_py_2:
     <<: *python
@@ -43,6 +55,7 @@ services:
       - ./dados/servidor_py_2:/data
     depends_on:
       - broker
+      - proxy
 
   servidor_c_1:
     <<: *c
@@ -54,6 +67,7 @@ services:
       - ./dados/servidor_c_1:/data
     depends_on:
       - broker
+      - proxy
 
   servidor_c_2:
     <<: *c
@@ -65,6 +79,7 @@ services:
       - ./dados/servidor_c_2:/data
     depends_on:
       - broker
+      - proxy
 
   # ------------------------------------------------------------------ clientes
   cliente_py_1:
