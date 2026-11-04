@@ -14,10 +14,28 @@ static char ARQ_LOGINS[512];
 static char ARQ_CANAIS[512];
 static char ARQ_PUBLICACOES[512];
 static void *pub_socket;
+static void *ref_socket;
 #define TAM_MAX_MENSAGEM 500
 
 static char canais[MAX_CANAIS][TAM_NOME]; 
 static size_t n_canais = 0;
+
+static int64_t relogio_contador = 0;
+static int64_t offset_relogio = 0;
+static int meu_rank = 0;
+static int msgs_recebidas = 0;
+
+static void att_relogio(int64_t relogio_rec)
+{
+    if (relogio_rec > relogio_contador) {
+        relogio_contador = relogio_rec;
+    }
+}
+
+static int64_t agora_ajst_ms(void)
+{
+    return agora_ms() + offset_relogio;
+}
 
 static int canal_existe(const char *nome)
 {
@@ -96,6 +114,49 @@ static int salvar_publicacao(const Publicacao *p, int64_t ts_requisicao)
     fclose(f);
     return 1;
 }
+
+// Comunicação com o serviço de Referência para Rank e Heartbeat
+static void comunicar_referencia(const char *operacao)
+{
+    relogio_contador++;
+    ReqReferencia req = REQ_REFERENCIA__INIT;
+    req.operacao = (char *)operacao;
+    req.nome = NOME;
+    req.timestamp = agora_ms();
+    req.relogio = relogio_contador;
+
+    size_t tam = req_referencia__get_packed_size(&req);
+    uint8_t *buf = malloc(tam ? tam : 1);
+    req_referencia__pack(&req, buf);
+    zmq_send(ref_socket, buf, tam, 0);
+    free(buf);
+
+    zmq_msg_t msg;
+    zmq_msg_init(&msg);
+    if (zmq_msg_recv(&msg, ref_socket, 0) < 0) {
+        zmq_msg_close(&msg);
+        return;
+    }
+
+    RepReferencia *rep = rep_referencia__unpack(NULL, zmq_msg_size(&msg), zmq_msg_data(&msg));
+    zmq_msg_close(&msg);
+
+    if (rep) {
+        att_relogio(rep->relogio);
+        if (strcmp(operacao, "rank") == 0) {
+            meu_rank = rep->rank;
+            printf("%s: registrado na Referência com rank=%d\n", NOME, meu_rank);
+        }
+
+        int64_t agora_local = agora_ms();
+        int64_t rtt = agora_local - req.timestamp;
+        int64_t hora_oficial = rep->timestamp + (rtt / 2);
+        offset_relogio = hora_oficial - agora_local;
+
+        rep_referencia__free_unpacked(rep, NULL);
+    }
+}
+
 static void op_login(const Requisicao *req, Resposta *resp)
 {
     if (!usuario_valido(req->usuario)) { resp->erro = "nome de usuario invalido"; return; }
@@ -134,7 +195,8 @@ static void op_publicar(const Requisicao *req, Resposta *resp)
     pub.usuario = req->usuario;
     pub.mensagem = req->mensagem;
     pub.servidor = NOME;
-    pub.timestamp = agora_ms();
+    pub.timestamp = agora_ajst_ms();
+    pub.relogio = relogio_contador;
 
     size_t tam = publicacao__get_packed_size(&pub);
     uint8_t *buf = malloc(tam ? tam : 1);
@@ -168,6 +230,7 @@ int main(void)
     snprintf(NOME, sizeof NOME, "%s", env_ou_padrao("NOME", host));
     const char *broker = env_ou_padrao("BROKER", "tcp://broker:5556");
     const char *proxy = env_ou_padrao("PROXY", "tcp://proxy:5557");
+    const char *referencia = env_ou_padrao("REFERENCIA", "tcp://referencia:5559");
     const char *dados = env_ou_padrao("DADOS", "/data");
 
     criar_pasta(dados);
@@ -181,9 +244,14 @@ int main(void)
     zmq_connect(rep, broker);
     pub_socket = zmq_socket(ctx, ZMQ_PUB);
     zmq_connect(pub_socket, proxy);
+    ref_socket = zmq_socket(ctx, ZMQ_REQ);
+    zmq_connect(ref_socket, referencia);
+
     printf("%s: servidor C conectado ao broker %s e ao proxy %s | dados em %s | %zu canais carregados\n",
            NOME, broker, proxy, dados, n_canais);
-
+    
+    comunicar_referencia("rank");
+    
     while (1) {
         zmq_msg_t msg;
         zmq_msg_init(&msg);
@@ -199,6 +267,7 @@ int main(void)
             resp.operacao = "desconhecida";
             resp.erro = "requisicao invalida";
         } else {
+            att_relogio(req->relogio);
             mostrar_requisicao(NOME, "<<< RECEBIDO", req);
             resp.operacao = req->operacao;
             if (strcmp(req->operacao, "login") == 0)              op_login(req, &resp);
@@ -206,9 +275,15 @@ int main(void)
             else if (strcmp(req->operacao, "listar_canais") == 0) op_listar_canais(req, &resp);
             else if (strcmp(req->operacao, "publicar") == 0)      op_publicar(req, &resp);
             else resp.erro = "operacao desconhecida";
+            msgs_recebidas++;
+            if (msgs_recebidas >= 10) {
+                comunicar_referencia("heartbeat");
+                msgs_recebidas = 0;
+            }
         }
-
-        resp.timestamp = agora_ms();
+        relogio_contador++;
+        resp.timestamp = agora_ajst_ms();
+        resp.relogio = relogio_contador;
         size_t tam = resposta__get_packed_size(&resp);
         uint8_t *buf = malloc(tam ? tam : 1);
         resposta__pack(&resp, buf);

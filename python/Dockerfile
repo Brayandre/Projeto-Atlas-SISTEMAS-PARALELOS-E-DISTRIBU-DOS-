@@ -12,3 +12,6 @@ COPY broker/*.py ./
 COPY python/*.py ./
 
 CMD ["python", "-u", "servidor.py"]
+
+COPY referencia/*.py ./
+COPY proxy/*.py ./

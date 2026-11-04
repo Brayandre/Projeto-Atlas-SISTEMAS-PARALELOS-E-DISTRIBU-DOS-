@@ -19,6 +19,7 @@ FRASES = ["ola pessoal", "alguem ai?", "bom dia", "que dia corrido", "isso e um 
           "sistemas distribuidos e legal", "zeromq funciona bem", "mensagem aleatoria",
           "tudo certo por aqui", "ate mais"]
 
+relogio_contador = 0
 context = zmq.Context()
 req_socket = context.socket(zmq.REQ)
 req_socket.connect(BROKER)
@@ -31,6 +32,12 @@ poller.register(sub_socket, zmq.POLLIN)
 
 conhecidos = []  
 inscritos = []   
+
+def att_relogio(relogio_rec):
+    global relogio_contador
+    if (relogio_rec > relogio_contador) :
+        relogio_contador = relogio_rec
+    
 
 
 def receber_publicacoes():
@@ -45,12 +52,15 @@ def receber_publicacoes():
             continue
         pub = pb.Publicacao()
         pub.ParseFromString(dados)
+        att_relogio(pub.relogio)
         mostrar_publicacao(NOME, "<<< RECEBIDO", pub, recebido)
 
 
 def requisitar(operacao, canal="", mensagem=""):
+    global relogio_contador
+    relogio_contador += 1
     req = pb.Requisicao(operacao=operacao, usuario=NOME, canal=canal,
-                        mensagem=mensagem, timestamp=agora_ms())
+                        mensagem=mensagem, timestamp=agora_ms(),relogio=relogio_contador)
     req_socket.send(req.SerializeToString())
     mostrar_requisicao(NOME, ">>> ENVIADO ", req)
 
@@ -61,6 +71,7 @@ def requisitar(operacao, canal="", mensagem=""):
         if req_socket in socks:
             resp = pb.Resposta()
             resp.ParseFromString(req_socket.recv())
+            att_relogio(resp.relogio)
             mostrar_resposta(NOME, "<<< RECEBIDO", resp)
             return resp
 

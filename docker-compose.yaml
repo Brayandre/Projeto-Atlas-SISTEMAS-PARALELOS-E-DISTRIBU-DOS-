@@ -1,7 +1,3 @@
-# Projeto Atlas - Parte 2
-# 1 broker + 1 proxy + 2 servidores e 2 clientes por integrante (Python e C)
-# Execução: docker compose up --build
-
 x-python: &python
   build:
     context: .
@@ -44,6 +40,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_py_2:
     <<: *python
@@ -56,6 +53,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_c_1:
     <<: *c
@@ -68,6 +66,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_c_2:
     <<: *c
@@ -80,6 +79,11 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
+  referencia:
+    image: atlas:python
+    container_name: referencia
+    command: python -u referencia.py
 
   # ------------------------------------------------------------------ clientes
   cliente_py_1:

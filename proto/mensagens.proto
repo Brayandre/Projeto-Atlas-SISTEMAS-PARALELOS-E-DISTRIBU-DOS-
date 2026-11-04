@@ -9,6 +9,7 @@ message Requisicao {
   string canal     = 3;  // usado em "criar_canal" e "publicar"
   int64  timestamp = 4;  // momento do envio
   string mensagem  = 5;  // "publicar"
+  int64  relogio   = 7;
 }
 
 // Resposta enviada pelo servidor ao bot (REP -> broker -> REQ)
@@ -19,6 +20,7 @@ message Resposta {
   repeated string canais = 4;  // "listar_canais"
   string servidor        = 5;  // nome do servidor que respondeu
   int64  timestamp       = 6;  // momento do envio
+  int64  relogio   = 7;
 }
 
 // Publicação PUB -> proxy -> SUB.
@@ -29,4 +31,26 @@ message Publicacao {
   string mensagem  = 3;  // texto publicado
   string servidor  = 4;  // servidor que publicou
   int64  timestamp = 5;  // momento do envio da publicação
+  int64  relogio   = 7;
+}
+
+message InfoServidor {
+  string nome = 1;
+  int32  rank = 2;
+}
+
+message ReqReferencia {
+  string operacao  = 1; // "rank" | "list" | "heartbeat" | "clock"
+  string nome      = 2; // nome do servidor 
+  int64  timestamp = 3;
+  int64  relogio   = 4; 
+}
+
+message RepReferencia {
+  string operacao                 = 1;
+  int32  rank                     = 2; 
+  repeated InfoServidor servidores = 3; // retorno de "list"
+  string status                   = 4;
+  int64  timestamp                = 5; 
+  int64  relogio                  = 6; 
 }
