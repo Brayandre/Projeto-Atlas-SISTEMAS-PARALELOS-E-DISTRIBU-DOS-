@@ -9,18 +9,18 @@ message Requisicao {
   string canal     = 3;  // usado em "criar_canal" e "publicar"
   int64  timestamp = 4;  // momento do envio
   string mensagem  = 5;  // "publicar"
-  int64  relogio   = 7;
+  int64  relogio   = 6;  // relógio lógico
 }
 
 // Resposta enviada pelo servidor ao bot (REP -> broker -> REQ)
 message Resposta {
-  string operacao        = 1;  // mesm operação da requisição
+  string operacao        = 1;  // mesma operação da requisição
   bool   sucesso         = 2;  // true = OK, false = erro
-  string erro            = 3;  // descrição do erro 
+  string erro            = 3;  // descrição do erro
   repeated string canais = 4;  // "listar_canais"
   string servidor        = 5;  // nome do servidor que respondeu
   int64  timestamp       = 6;  // momento do envio
-  int64  relogio   = 7;
+  int64  relogio         = 7;  // relógio lógico
 }
 
 // Publicação PUB -> proxy -> SUB.
@@ -31,7 +31,7 @@ message Publicacao {
   string mensagem  = 3;  // texto publicado
   string servidor  = 4;  // servidor que publicou
   int64  timestamp = 5;  // momento do envio da publicação
-  int64  relogio   = 7;
+  int64  relogio   = 6;  // relógio lógico
 }
 
 message InfoServidor {
@@ -41,16 +41,31 @@ message InfoServidor {
 
 message ReqReferencia {
   string operacao  = 1; // "rank" | "list" | "heartbeat" | "clock"
-  string nome      = 2; // nome do servidor 
+  string nome      = 2; // nome do servidor
   int64  timestamp = 3;
-  int64  relogio   = 4; 
+  int64  relogio   = 4;
 }
 
 message RepReferencia {
-  string operacao                 = 1;
-  int32  rank                     = 2; 
+  string operacao                  = 1;
+  int32  rank                      = 2;
   repeated InfoServidor servidores = 3; // retorno de "list"
-  string status                   = 4;
-  int64  timestamp                = 5; 
-  int64  relogio                  = 6; 
+  string status                    = 4;
+  int64  timestamp                 = 5;
+  int64  relogio                   = 6;
+}
+
+message ReqServidor {
+  string operacao  = 1; // "relogio" | "eleicao"
+  string remetente = 2; // nome do servidor que enviou
+  int32  rank      = 3; // rank do remetente
+  int64  timestamp = 4; // hora física
+  int64  relogio   = 5; // relógio lógico
+}
+
+message RepServidor {
+  string operacao  = 1; // "relogio" | "eleicao"
+  string status    = 2; // "OK"
+  int64  timestamp = 3; // hora correta do coordenador
+  int64  relogio   = 4; // relógio lógico
 }
