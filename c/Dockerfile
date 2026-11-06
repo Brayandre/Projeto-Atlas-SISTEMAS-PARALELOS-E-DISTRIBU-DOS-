@@ -1,4 +1,4 @@
-# Imagem do cliente/servidor em C (ZeroMQ + protobuf-c)
+
 FROM alpine:3.21
 
 RUN apk add --no-cache build-base zeromq-dev protobuf-c-dev protobuf-c-compiler

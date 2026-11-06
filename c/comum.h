@@ -1,5 +1,4 @@
-/* Funções comuns ao cliente e ao servidor em C:
- * relógio, validação de nomes e exibição formatada das mensagens. */
+
 #ifndef COMUM_H
 #define COMUM_H
 
@@ -7,7 +6,7 @@
 #include <stddef.h>
 #include "mensagens.pb-c.h"
 
-#define TAM_NOME 33      /* 32 caracteres + '\0' */
+#define TAM_NOME 33      
 #define MAX_CANAIS 1024
 
 int64_t agora_ms(void);
@@ -19,5 +18,6 @@ int canal_valido(const char *s);
 
 void mostrar_requisicao(const char *quem, const char *direcao, const Requisicao *r);
 void mostrar_resposta(const char *quem, const char *direcao, const Resposta *r);
+void mostrar_publicacao(const char *quem, const char *direcao, const Publicacao *p, int64_t recebido_ms);
 
 #endif

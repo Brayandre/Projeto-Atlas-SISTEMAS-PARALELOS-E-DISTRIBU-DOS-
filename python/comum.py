@@ -1,5 +1,4 @@
-# Funções comuns ao cliente e ao servidor em Python:
-# relógio, validação de nomes e exibição formatada das mensagens.
+
 import re
 import time
 from datetime import datetime
@@ -25,6 +24,8 @@ def mostrar_requisicao(quem, direcao, r):
     campos = [("operacao", r.operacao), ("usuario", r.usuario)]
     if r.canal:
         campos.append(("canal", r.canal))
+    if r.mensagem:
+        campos.append(("mensagem", f'"{r.mensagem}"'))
     campos.append(("timestamp", fmt_ts(r.timestamp)))
     _linha(quem, direcao, "REQ", campos)
 
@@ -38,3 +39,11 @@ def mostrar_resposta(quem, direcao, r):
     campos.append(("servidor", r.servidor))
     campos.append(("timestamp", fmt_ts(r.timestamp)))
     _linha(quem, direcao, "REP", campos)
+
+
+def mostrar_publicacao(quem, direcao, p, recebido_ms=None):
+    campos = [("canal", p.canal), ("usuario", p.usuario), ("mensagem", f'"{p.mensagem}"'),
+              ("servidor", p.servidor), ("enviado", fmt_ts(p.timestamp))]
+    if recebido_ms is not None:
+        campos.append(("recebido", fmt_ts(recebido_ms)))
+    _linha(quem, direcao, "PUB", campos)
