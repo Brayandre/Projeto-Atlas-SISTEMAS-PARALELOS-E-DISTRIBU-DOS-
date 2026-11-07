@@ -93,7 +93,6 @@ def main():
 
         relogio_contador += 1
         rep.relogio = relogio_contador
-        rep.timestamp = agora_ms()
 
         rep_socket.send(rep.SerializeToString())
 

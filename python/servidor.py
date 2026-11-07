@@ -9,10 +9,12 @@ from comum import (RE_CANAL, RE_USUARIO, agora_ms, fmt_ts, mostrar_publicacao,
                    mostrar_requisicao, mostrar_resposta)
 
 NOME = os.environ.get("NOME", socket.gethostname())
+DADOS = os.environ.get("DADOS", "/data")
 BROKER = os.environ.get("BROKER", "tcp://broker:5556")
 PROXY = os.environ.get("PROXY", "tcp://proxy:5557")
-DADOS = os.environ.get("DADOS", "/data")
+PROXY_SUB = os.environ.get("PROXY_SUB", "tcp://proxy:5558")
 REFERENCIA = os.environ.get("REFERENCIA", "tcp://referencia:5559")
+PORTASERVER = int(os.environ.get("PORTASERVER", "5560"))
 
 ARQ_LOGINS = os.path.join(DADOS, "logins.tsv")
 ARQ_CANAIS = os.path.join(DADOS, "canais.tsv")
@@ -25,6 +27,11 @@ relogio_contador = 0
 offset_relogio = 0
 meu_rank = 0
 msgs_recebidas = 0
+coordenador = ""
+context = None
+por_rep = None
+pub_socket = None
+sub_socket = None
 
 def att_relogio(relogio_rec):
     global relogio_contador
@@ -56,10 +63,121 @@ def comunicar_referencia(operacao):
         meu_rank = rep.rank
         print(f"{NOME}: registrado na ref com rank={meu_rank}", flush=True)
 
+    return rep
+
+def anuncia_coord():
+    global coordenador, relogio_contador
+    coordenador = NOME
+    relogio_contador += 1
+    pub = pb.Publicacao(
+        canal="servers",
+        usuario=NOME,
+        mensagem=NOME,
+        servidor=NOME,
+        timestamp=agora_ajst_ms(),
+        relogio=relogio_contador
+    )
+    pub_socket.send_multipart([b"servers", pub.SerializeToString()])
+    print(f"{NOME}: novo cordenador (rank={meu_rank})", flush=True)
+
+def requisitar_server(alvo_nome, operacao):
+    global relogio_contador
+    sock = context.socket(zmq.REQ)
+    sock.setsockopt(zmq.RCVTIMEO, 1500)
+    sock.setsockopt(zmq.SNDTIMEO, 1500)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.connect(f"tcp://{alvo_nome}:{PORTASERVER}")
+
+    relogio_contador += 1
+    req = pb.ReqServidor(
+        operacao=operacao,
+        remetente=NOME,
+        rank=meu_rank,
+        timestamp=agora_ajst_ms(),
+        relogio=relogio_contador
+    )
+
+    try:
+        sock.send(req.SerializeToString())
+        dados = sock.recv()
+        rep = pb.RepServidor()
+        rep.ParseFromString(dados)
+        att_relogio(rep.relogio)
+        sock.close()
+        return req.timestamp, rep
+    except zmq.ZMQError:
+        sock.close()
+        return req.timestamp, None
+
+def iniciar_eleicao():
+    rep_lista = comunicar_referencia("list")
+
+    alguem_acima_respondeu = False
+    for srv in rep_lista.servidores:
+        if srv.nome == NOME:
+            continue
+        if srv.rank < meu_rank:
+            _, rep = requisitar_server(srv.nome, "eleicao")
+            if rep is not None and rep.status == "OK":
+                alguem_acima_respondeu = True
+
+    if not alguem_acima_respondeu:
+        anuncia_coord()
+
+def sincronizar_relogio():
+    global offset_relogio, coordenador
+    if not coordenador:
+        iniciar_eleicao()
+
+    if coordenador == NOME:
+        return
+
+    t_envio, rep = requisitar_server(coordenador, "relogio")
+    if rep is None:
+        print(f"{NOME}: coordenador '{coordenador}' indisponivel | iniciando nova eleicao", flush=True)
+        iniciar_eleicao()
+        return
+
     agora_local = agora_ms()
-    rtt = agora_local - req.timestamp
-    hora_oficial = rep.timestamp + (rtt // 2)
-    offset_relogio = hora_oficial - agora_local
+    rtt = agora_local - t_envio
+    hora_coord = rep.timestamp + (rtt // 2)
+    offset_relogio = hora_coord - agora_local
+
+def tratarpor_req():
+    global relogio_contador
+    dados = por_rep.recv()
+    req = pb.ReqServidor()
+    req.ParseFromString(dados)
+    att_relogio(req.relogio)
+
+    relogio_contador += 1
+    rep = pb.RepServidor(
+        operacao=req.operacao,
+        status="OK",
+        timestamp=agora_ajst_ms(),
+        relogio=relogio_contador
+    )
+    por_rep.send(rep.SerializeToString())
+
+    if req.operacao == "eleicao":
+        print(f"{NOME}: recebi pedido de ELEICAO de '{req.remetente}' (rank={req.rank}) -> respondi OK", flush=True)
+        if meu_rank < req.rank and coordenador != NOME:
+            iniciar_eleicao()
+    elif req.operacao == "relogio":
+        print(f"{NOME}: forneci hora para '{req.remetente}'", flush=True)
+
+def tratar_subservers():
+    global coordenador
+    while True:
+        try:
+            topico, dados = sub_socket.recv_multipart(zmq.NOBLOCK)
+        except zmq.Again:
+            return
+        pub = pb.Publicacao()
+        pub.ParseFromString(dados)
+        att_relogio(pub.relogio)
+        coordenador = pub.mensagem or pub.servidor
+        print(f"{NOME}: novo coordenador eleito: '{coordenador}'", flush=True)
 
 def limpar(texto):
     return texto.replace("\t", " ").replace("\n", " ").replace("\r", " ")
@@ -145,7 +263,7 @@ pub_socket = None
 ref_socket = None
 
 def main():
-    global pub_socket, ref_socket, relogio_contador, msgs_recebidas
+    global pub_socket, ref_socket, relogio_contador, msgs_recebidas, context, por_rep, sub_socket
     os.makedirs(DADOS, exist_ok=True)
     carregar_canais()
 
@@ -156,8 +274,21 @@ def main():
     pub_socket = context.socket(zmq.PUB)
     pub_socket.connect(PROXY)
 
+    sub_socket = context.socket(zmq.SUB)
+    sub_socket.connect(PROXY_SUB)
+    sub_socket.setsockopt_string(zmq.SUBSCRIBE, "servers")
+
     ref_socket = context.socket(zmq.REQ)
     ref_socket.connect(REFERENCIA)
+
+    por_rep = context.socket(zmq.REP)
+    por_rep.bind(f"tcp://*:{PORTASERVER}")
+
+    poller = zmq.Poller()
+    poller.register(rep, zmq.POLLIN)
+    poller.register(por_rep, zmq.POLLIN)
+    poller.register(sub_socket, zmq.POLLIN)
+
 
     print(f"{NOME}: server py conectado ao broker {BROKER} e  proxy {PROXY} | "
           f"dados em {DADOS} | {len(canais)} canais carregados", flush=True)
@@ -165,33 +296,45 @@ def main():
     comunicar_referencia("rank")
 
     while True:
-        dados = rep.recv()
-        req = pb.Requisicao()
-        resp = pb.Resposta(servidor=NOME)
-        try:
-            req.ParseFromString(dados)
-            att_relogio(req.relogio)
-            mostrar_requisicao(NOME, "<<< RECEBIDO", req)
-            resp.operacao = req.operacao
-            operacao = OPERACOES.get(req.operacao)
-            if operacao is None:
-                resp.erro = "operacao desconhecida"
-            else:
-                operacao(req, resp)
-            msgs_recebidas += 1
-            if msgs_recebidas >= 10:
-                comunicar_referencia("heartbeat")
-                msgs_recebidas = 0
-        except Exception as e:  
-            resp.operacao = req.operacao or "desconhecida"
-            resp.sucesso = False
-            resp.erro = f"requisicao invalida ({e})"
+        socks = dict(poller.poll())
+        
+        if por_rep in socks:
+            tratarpor_req()
+        if sub_socket in socks:
+            tratar_subservers()
+        if rep in socks:
+            dados = rep.recv()
+            req = pb.Requisicao()
+            resp = pb.Resposta(servidor=NOME)
+            try:
+                req.ParseFromString(dados)
+                att_relogio(req.relogio)
+                mostrar_requisicao(NOME, "<<< RECEBIDO", req)
+                resp.operacao = req.operacao
+                operacao = OPERACOES.get(req.operacao)
+                if operacao is None:
+                    resp.erro = "operacao desconhecida"
+                else:
+                    operacao(req, resp)
+                    
+                msgs_recebidas += 1
+                
+                if msgs_recebidas % 10 == 0:
+                    comunicar_referencia("heartbeat")
+                    
+                if msgs_recebidas % 15 == 0:
+                    sincronizar_relogio()            
+                    
+            except Exception as e:  
+                resp.operacao = req.operacao or "desconhecida"
+                resp.sucesso = False
+                resp.erro = f"requisicao invalida ({e})"
             
-        relogio_contador += 1
-        resp.timestamp = agora_ajst_ms()
-        resp.relogio = relogio_contador
-        rep.send(resp.SerializeToString())
-        mostrar_resposta(NOME, ">>> ENVIADO ", resp)
+            relogio_contador += 1
+            resp.timestamp = agora_ajst_ms()
+            resp.relogio = relogio_contador
+            rep.send(resp.SerializeToString())
+            mostrar_resposta(NOME, ">>> ENVIADO ", resp)
 
 
 if __name__ == "__main__":
