@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 
 static char NOME[64];
 static char coordenador[64] = "";
+static char ARQ_DB[512];
 static char ARQ_LOGINS[512];
 static char ARQ_CANAIS[512];
 static char ARQ_PUBLICACOES[512];
@@ -19,11 +21,12 @@ static void *pub_socket;
 static void *sub_socket;
 static void *ref_socket;
 static void *por_rep;
+static sqlite3 *db = NULL;
 static int PORTASERVER = 5560;
 
 #define TAM_MAX_MENSAGEM 500
 
-static char canais[MAX_CANAIS][TAM_NOME]; 
+static char canais[MAX_CANAIS][TAM_NOME];
 static size_t n_canais = 0;
 
 static int64_t relogio_contador = 0;
@@ -59,8 +62,49 @@ static void adicionar_canal(const char *nome)
     }
 }
 
+static void criar_pasta(const char *caminho)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof tmp, "%s", caminho);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = '\0'; mkdir(tmp, 0755); *p = '/'; }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) perror("mkdir");
+}
+
+/* --- SQLITE E PERSISTÊNCIA LOCAL --- */
+
+static void iniciar_db(void)
+{
+    if (sqlite3_open(ARQ_DB, &db) != SQLITE_OK) {
+        fprintf(stderr, "Erro ao abrir SQLite: %s\n", sqlite3_errmsg(db));
+        return;
+    }
+    const char *sql =
+        "CREATE TABLE IF NOT EXISTS logins ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  timestamp INTEGER, data_hora TEXT, usuario TEXT, origem TEXT);"
+        "CREATE TABLE IF NOT EXISTS canais ("
+        "  nome TEXT PRIMARY KEY, timestamp INTEGER, data_hora TEXT, criador TEXT, origem TEXT);"
+        "CREATE TABLE IF NOT EXISTS publicacoes ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  timestamp INTEGER, data_hora TEXT, ts_requisicao INTEGER,"
+        "  canal TEXT, usuario TEXT, mensagem TEXT, servidor TEXT);";
+    sqlite3_exec(db, sql, 0, 0, NULL);
+}
+
 static void carregar_canais(void)
 {
+    if (db) {
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, "SELECT nome FROM canais", -1, &stmt, NULL) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *c = (const char *)sqlite3_column_text(stmt, 0);
+                if (c && canal_valido(c)) adicionar_canal(c);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
     FILE *f = fopen(ARQ_CANAIS, "r");
     if (!f) return;
     char linha[1024];
@@ -73,55 +117,119 @@ static void carregar_canais(void)
     fclose(f);
 }
 
-static void criar_pasta(const char *caminho)
-{
-    char tmp[512];
-    snprintf(tmp, sizeof tmp, "%s", caminho);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') { *p = '\0'; mkdir(tmp, 0755); *p = '/'; }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) perror("mkdir");
-}
-
-static int salvar_login(const Requisicao *r)
+static int gravar_login_local(int64_t ts_val, const char *usuario, const char *origem)
 {
     char ts[32];
-    fmt_ts(r->timestamp, ts, sizeof ts);
+    fmt_ts(ts_val, ts, sizeof ts);
+
+    if (db) {
+        sqlite3_stmt *stmt;
+        const char *sql = "INSERT INTO logins (timestamp, data_hora, usuario, origem) VALUES (?, ?, ?, ?)";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, ts_val);
+            sqlite3_bind_text(stmt, 2, ts, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 3, usuario, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, origem, -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
     FILE *f = fopen(ARQ_LOGINS, "a");
     if (!f) { perror("logins"); return 0; }
-    fprintf(f, "%lld\t%s\t%s\n", (long long)r->timestamp, ts, r->usuario);
+    fprintf(f, "%lld\t%s\t%s\n", (long long)ts_val, ts, usuario);
     fclose(f);
     return 1;
 }
 
-static int salvar_canal(const Requisicao *r, const char *criador)
+static int gravar_canal_local(int64_t ts_val, const char *canal, const char *criador, const char *origem)
 {
+    adicionar_canal(canal);
     char ts[32];
-    fmt_ts(r->timestamp, ts, sizeof ts);
+    fmt_ts(ts_val, ts, sizeof ts);
+
+    if (db) {
+        sqlite3_stmt *stmt;
+        const char *sql = "INSERT OR IGNORE INTO canais (nome, timestamp, data_hora, criador, origem) VALUES (?, ?, ?, ?, ?)";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, canal, -1, SQLITE_STATIC);
+            sqlite3_bind_int64(stmt, 2, ts_val);
+            sqlite3_bind_text(stmt, 3, ts, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 4, criador, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, origem, -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
     FILE *f = fopen(ARQ_CANAIS, "a");
     if (!f) { perror("canais"); return 0; }
-    fprintf(f, "%lld\t%s\t%s\t%s\n", (long long)r->timestamp, ts, r->canal, criador);
+    fprintf(f, "%lld\t%s\t%s\t%s\n", (long long)ts_val, ts, canal, criador);
     fclose(f);
     return 1;
 }
 
-static int salvar_publicacao(const Publicacao *p, int64_t ts_requisicao)
+static int gravar_publicacao_local(int64_t ts_pub, int64_t ts_req, const char *canal,
+                                   const char *usuario, const char *mensagem, const char *origem)
 {
     char ts[32];
-    fmt_ts(p->timestamp, ts, sizeof ts);
+    fmt_ts(ts_pub, ts, sizeof ts);
+
+    char msg_limpa[TAM_MAX_MENSAGEM + 1];
+    strncpy(msg_limpa, mensagem, TAM_MAX_MENSAGEM);
+    msg_limpa[TAM_MAX_MENSAGEM] = '\0';
+    for (char *c = msg_limpa; *c; c++) {
+        if (*c == '\t' || *c == '\n' || *c == '\r') *c = ' ';
+    }
+
+    if (db) {
+        sqlite3_stmt *stmt;
+        const char *sql = "INSERT INTO publicacoes (timestamp, data_hora, ts_requisicao, canal, usuario, mensagem, servidor) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, ts_pub);
+            sqlite3_bind_text(stmt, 2, ts, -1, SQLITE_STATIC);
+            sqlite3_bind_int64(stmt, 3, ts_req);
+            sqlite3_bind_text(stmt, 4, canal, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 5, usuario, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 6, msg_limpa, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 7, origem, -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
     FILE *f = fopen(ARQ_PUBLICACOES, "a");
     if (!f) { perror("publicacoes"); return 0; }
-    fprintf(f, "%lld\t%s\t%lld\t%s\t%s\t", (long long)p->timestamp, ts,
-            (long long)ts_requisicao, p->canal, p->usuario);
-    /* TAB e quebras de linha são separadores do arquivo TSV */
-    for (const char *c = p->mensagem; *c; c++)
-        fputc((*c == '\t' || *c == '\n' || *c == '\r') ? ' ' : *c, f);
-    fputc('\n', f);
+    fprintf(f, "%lld\t%s\t%lld\t%s\t%s\t%s\n",
+            (long long)ts_pub, ts, (long long)ts_req, canal, usuario, msg_limpa);
     fclose(f);
     return 1;
 }
 
-// Comunicação com o serviço de Referência (rank, heartbeat, list)
+static void enviar_replica(const char *tipo, const char *usuario, const char *canal,
+                           const char *mensagem, int64_t timestamp, int64_t ts_requisicao)
+{
+    relogio_contador++;
+    Replica rep_msg = REPLICA__INIT;
+    rep_msg.tipo = (char *)tipo;
+    rep_msg.servidor = NOME;
+    rep_msg.usuario = (char *)(usuario ? usuario : "");
+    rep_msg.canal = (char *)(canal ? canal : "");
+    rep_msg.mensagem = (char *)(mensagem ? mensagem : "");
+    rep_msg.timestamp = timestamp;
+    rep_msg.ts_requisicao = ts_requisicao;
+    rep_msg.relogio = relogio_contador;
+
+    size_t tam = replica__get_packed_size(&rep_msg);
+    uint8_t *buf = malloc(tam ? tam : 1);
+    replica__pack(&rep_msg, buf);
+    zmq_send(pub_socket, "replica", 7, ZMQ_SNDMORE);
+    zmq_send(pub_socket, buf, tam, 0);
+    free(buf);
+}
+
+/* --- REFERÊNCIA, ELEIÇÃO E BERKELEY --- */
+
 static RepReferencia *comunicar_referencia(const char *operacao)
 {
     relogio_contador++;
@@ -190,7 +298,11 @@ static RepServidor *requisitar_server(const char *alvo_nome, const char *operaca
     zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof linger);
 
     char end[128];
-    snprintf(end, sizeof end, "tcp://%s:%d", alvo_nome, PORTASERVER);
+    if (strchr(alvo_nome, ':') != NULL) {
+        snprintf(end, sizeof end, "tcp://%s", alvo_nome);
+    } else {
+        snprintf(end, sizeof end, "tcp://%s:%d", alvo_nome, PORTASERVER);
+    }
     zmq_connect(sock, end);
 
     relogio_contador++;
@@ -324,36 +436,71 @@ static void tratarpor_req(void)
 static void tratar_subservers(void)
 {
     while (1) {
-        zmq_msg_t topico, corpo;
-        zmq_msg_init(&topico);
-        if (zmq_msg_recv(&topico, sub_socket, ZMQ_DONTWAIT) < 0) {
-            zmq_msg_close(&topico);
+        zmq_msg_t topico_msg, corpo;
+        zmq_msg_init(&topico_msg);
+        if (zmq_msg_recv(&topico_msg, sub_socket, ZMQ_DONTWAIT) < 0) {
+            zmq_msg_close(&topico_msg);
             return;
         }
-        if (!zmq_msg_more(&topico)) {
-            zmq_msg_close(&topico);
+
+        char topico[32] = "";
+        size_t t_size = zmq_msg_size(&topico_msg);
+        if (t_size >= sizeof topico) t_size = sizeof(topico) - 1;
+        memcpy(topico, zmq_msg_data(&topico_msg), t_size);
+        topico[t_size] = '\0';
+
+        if (!zmq_msg_more(&topico_msg)) {
+            zmq_msg_close(&topico_msg);
             continue;
         }
         zmq_msg_init(&corpo);
         zmq_msg_recv(&corpo, sub_socket, 0);
 
-        Publicacao *pub = publicacao__unpack(NULL, zmq_msg_size(&corpo), zmq_msg_data(&corpo));
-        if (pub) {
-            att_relogio(pub->relogio);
-            const char *novo = (pub->mensagem && pub->mensagem[0]) ? pub->mensagem : pub->servidor;
-            snprintf(coordenador, sizeof coordenador, "%s", novo);
-            printf("%s: novo coordenador eleito: '%s'\n", NOME, coordenador);
-            publicacao__free_unpacked(pub, NULL);
+        if (strcmp(topico, "servers") == 0) {
+            Publicacao *pub = publicacao__unpack(NULL, zmq_msg_size(&corpo), zmq_msg_data(&corpo));
+            if (pub) {
+                att_relogio(pub->relogio);
+                const char *novo = (pub->mensagem && pub->mensagem[0]) ? pub->mensagem : pub->servidor;
+                snprintf(coordenador, sizeof coordenador, "%s", novo);
+                printf("%s: novo coordenador eleito: '%s'\n", NOME, coordenador);
+                publicacao__free_unpacked(pub, NULL);
+            }
+        } else if (strcmp(topico, "replica") == 0) {
+            Replica *rep_msg = replica__unpack(NULL, zmq_msg_size(&corpo), zmq_msg_data(&corpo));
+            if (rep_msg) {
+                att_relogio(rep_msg->relogio);
+                if (strcmp(rep_msg->servidor, NOME) != 0) {
+                    if (strcmp(rep_msg->tipo, "login") == 0) {
+                        gravar_login_local(rep_msg->timestamp, rep_msg->usuario, rep_msg->servidor);
+                    } else if (strcmp(rep_msg->tipo, "canal") == 0) {
+                        gravar_canal_local(rep_msg->timestamp, rep_msg->canal, rep_msg->usuario, rep_msg->servidor);
+                    } else if (strcmp(rep_msg->tipo, "publicacao") == 0) {
+                        if (!canal_existe(rep_msg->canal)) {
+                            gravar_canal_local(rep_msg->ts_requisicao, rep_msg->canal, "(via replica)", rep_msg->servidor);
+                        }
+                        gravar_publicacao_local(rep_msg->timestamp, rep_msg->ts_requisicao,
+                                                rep_msg->canal, rep_msg->usuario,
+                                                rep_msg->mensagem, rep_msg->servidor);
+                    }
+                    printf("%s: [REPLICA] %s de '%s' gravado no SQLite\n",
+                           NOME, rep_msg->tipo, rep_msg->servidor);
+                }
+                replica__free_unpacked(rep_msg, NULL);
+            }
         }
-        zmq_msg_close(&topico);
+
+        zmq_msg_close(&topico_msg);
         zmq_msg_close(&corpo);
     }
 }
 
+// OPERAÇÕES 
+
 static void op_login(const Requisicao *req, Resposta *resp)
 {
     if (!usuario_valido(req->usuario)) { resp->erro = "nome de usuario invalido"; return; }
-    if (!salvar_login(req)) { resp->erro = "falha ao gravar login"; return; }
+    if (!gravar_login_local(req->timestamp, req->usuario, NOME)) { resp->erro = "falha ao gravar login"; return; }
+    enviar_replica("login", req->usuario, "", "", req->timestamp, 0);
     resp->sucesso = 1;
 }
 
@@ -363,8 +510,11 @@ static void op_criar_canal(const Requisicao *req, Resposta *resp)
     else if (canal_existe(req->canal))  resp->erro = "canal ja existe";
     else {
         if (n_canais >= MAX_CANAIS) { resp->erro = "limite de canais atingido"; return; }
-        if (!salvar_canal(req, req->usuario)) { resp->erro = "falha ao gravar canal"; return; }
-        adicionar_canal(req->canal);
+        if (!gravar_canal_local(req->timestamp, req->canal, req->usuario, NOME)) {
+            resp->erro = "falha ao gravar canal";
+            return;
+        }
+        enviar_replica("canal", req->usuario, req->canal, "", req->timestamp, 0);
         resp->sucesso = 1;
     }
 }
@@ -379,8 +529,8 @@ static void op_publicar(const Requisicao *req, Resposta *resp)
 
     if (!canal_existe(req->canal)) {
         if (n_canais >= MAX_CANAIS) { resp->erro = "limite de canais atingido"; return; }
-        adicionar_canal(req->canal);
-        salvar_canal(req, "(via publicacao)");
+        gravar_canal_local(req->timestamp, req->canal, "(via publicacao)", NOME);
+        enviar_replica("canal", "(via publicacao)", req->canal, "", req->timestamp, 0);
     }
 
     relogio_contador++;
@@ -400,7 +550,11 @@ static void op_publicar(const Requisicao *req, Resposta *resp)
     free(buf);
     mostrar_publicacao(NOME, ">>> ENVIADO ", &pub, -1);
 
-    if (!salvar_publicacao(&pub, req->timestamp)) { resp->erro = "falha ao gravar publicacao"; return; }
+    if (!gravar_publicacao_local(pub.timestamp, req->timestamp, pub.canal, pub.usuario, pub.mensagem, NOME)) {
+        resp->erro = "falha ao gravar publicacao";
+        return;
+    }
+    enviar_replica("publicacao", pub.usuario, pub.canal, pub.mensagem, pub.timestamp, req->timestamp);
     resp->sucesso = 1;
 }
 
@@ -430,9 +584,11 @@ int main(void)
     PORTASERVER = atoi(env_ou_padrao("PORTASERVER", "5560"));
 
     criar_pasta(dados);
+    snprintf(ARQ_DB, sizeof ARQ_DB, "%s/atlas.db", dados);
     snprintf(ARQ_LOGINS, sizeof ARQ_LOGINS, "%s/logins.tsv", dados);
     snprintf(ARQ_CANAIS, sizeof ARQ_CANAIS, "%s/canais.tsv", dados);
     snprintf(ARQ_PUBLICACOES, sizeof ARQ_PUBLICACOES, "%s/publicacoes.tsv", dados);
+    iniciar_db();
     carregar_canais();
 
     ctx = zmq_ctx_new();
@@ -445,6 +601,7 @@ int main(void)
     sub_socket = zmq_socket(ctx, ZMQ_SUB);
     zmq_connect(sub_socket, proxy_sub);
     zmq_setsockopt(sub_socket, ZMQ_SUBSCRIBE, "servers", 7);
+    zmq_setsockopt(sub_socket, ZMQ_SUBSCRIBE, "replica", 7);
 
     ref_socket = zmq_socket(ctx, ZMQ_REQ);
     zmq_connect(ref_socket, referencia);
@@ -454,8 +611,8 @@ int main(void)
     snprintf(end_bind, sizeof end_bind, "tcp://*:%d", PORTASERVER);
     zmq_bind(por_rep, end_bind);
 
-    printf("%s: servidor C conectado ao broker %s e ao proxy %s | dados em %s | %zu canais carregados\n",
-           NOME, broker, proxy, dados, n_canais);
+    printf("%s: servidor C conectado | SQLite em %s | %zu canais carregados\n",
+           NOME, ARQ_DB, n_canais);
 
     RepReferencia *r_rank = comunicar_referencia("rank");
     if (r_rank) rep_referencia__free_unpacked(r_rank, NULL);
@@ -522,6 +679,7 @@ int main(void)
         }
     }
 
+    if (db) sqlite3_close(db);
     zmq_close(por_rep);
     zmq_close(ref_socket);
     zmq_close(sub_socket);

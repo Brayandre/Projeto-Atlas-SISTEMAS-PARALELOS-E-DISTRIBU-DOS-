@@ -1,7 +1,7 @@
 
 FROM alpine:3.21
 
-RUN apk add --no-cache build-base zeromq-dev protobuf-c-dev protobuf-c-compiler
+RUN apk add --no-cache build-base zeromq-dev protobuf-c-dev protobuf-c-compiler sqlite-dev
 
 WORKDIR /app
 
