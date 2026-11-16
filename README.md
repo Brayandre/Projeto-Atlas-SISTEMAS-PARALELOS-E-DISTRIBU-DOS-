@@ -27,18 +27,6 @@ Os dados e bancos SQLite de cada servidor ficam na pasta `dados/<nome_do_servido
 
 ## Arquitetura
 
-mermaid
-flowchart LR
-  subgraph Bots
-    BP1[bot_py_1] & BP2[bot_py_2] & BC1[bot_c_1] & BC2[bot_c_2]
-  end
-  B["broker<br/>ROUTER :5555 / DEALER :5556"]
-  subgraph Servidores
-    SP1[servidor_py_1] & SP2[servidor_py_2] & SC1[servidor_c_1] & SC2[servidor_c_2]
-  end
-  BP1 & BP2 & BC1 & BC2 -- REQ --> B
-  B -- REP --> SP1 & SP2 & SC1 & SC2
-
 - **broker** (`broker/broker.py`): modelo Request-Reply. Os bots se conectam com `REQ` na porta 5555 (`ROUTER`) e os servidores com `REP` na porta 5556 (`DEALER`). O `DEALER` distribui as requisições entre os servidores por *round-robin*.
 - **proxy** (`proxy/proxy.py`): gerencia o padrão PUB/SUB (portas 5557 e 5558) para broadcast de publicações nos canais, anúncios de coordenadores e replicação de dados entre os nós.
 - **referência** (`referencia/referencia.py`): centraliza a atribuição de ranks iniciais aos servidores, listagem de nós ativos e serviço de heartbeat (porta 5559).
@@ -71,6 +59,7 @@ Para solucionar o problema do balanceamento por *round-robin* (onde cada servido
 ## Estrutura do repositório
 
 
+```
 ├── docker-compose.yaml
 ├── proto/mensagens.proto     
 ├── broker/broker.py
@@ -87,3 +76,4 @@ Para solucionar o problema do balanceamento por *round-robin* (onde cada servido
     ├── comum.h / comum.c
     ├── servidor.c
     └── cliente.c
+```
