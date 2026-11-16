@@ -1,6 +1,6 @@
 # Projeto Atlas: sistema de troca de mensagens instantâneas
 
-Projeto da disciplina **CC7261 - Sistemas Distribuídos** (FEI). É uma versão simplificada de um BBS/IRC em que bots (clientes) fazem login, criam e listam canais públicos. Os servidores respondem às requisições e guardam os dados em disco.
+Projeto da disciplina **CC7261 - Sistemas Distribuídos** (FEI). É uma versão distribuída de um BBS/IRC em que bots (clientes) fazem login, criam canais, publicam mensagens e trocam dados em tempo real, contando com relógios lógicos de Lamport, eleição de líder (Bully/Rank), sincronização de relógio (Berkeley), persistência via SQLite e replicação ativa de dados.
 
 **Integrantes**
 
@@ -9,125 +9,81 @@ Projeto da disciplina **CC7261 - Sistemas Distribuídos** (FEI). É uma versão 
 | Brayan André da Costa | 22124005-4 | Python |
 | Gustavo Souza Alvarenga | 22124058-3 | C |
 
-> **Parte 1:** login de usuário, criação e listagem de canais.
+> **Partes implementadas:**
+> - **Parte 1:** Login de usuário, criação e listagem de canais.
+> - **Parte 2:** Troca de mensagens públicas (`publicar`) com broadcast via proxy PUB/SUB.
+> - **Parte 3:** Relógios lógicos de Lamport integrados a todas as mensagens.
+> - **Parte 4:** Serviço de Referência para atribuição de ranks, algoritmo de eleição de coordenador e sincronização de relógio (Berkeley).
+> - **Parte 5:** Persistência relacional local via **SQLite** (`atlas.db`) e replicação ativa em tempo real entre todos os servidores.
 
 ## Como executar
 
-```bash
 docker compose up --build
-```
 
-O comando sobe todos os containers: 1 broker, 4 servidores (2 em Python e 2 em C) e 4 bots (2 em Python e 2 em C). Nenhuma interação com o usuário é necessária. Para parar, use `Ctrl+C` e depois `docker compose down`.
 
-Os dados de cada servidor ficam na pasta `dados/<nome_do_servidor>/` do host. Para começar do zero, apague a pasta `dados/`.
+O comando sobe todos os containers: 1 serviço de referência, 1 broker, 1 proxy PUB/SUB, 4 servidores (2 em Python e 2 em C) e 4 bots (2 em Python e 2 em C). Nenhuma interação com o usuário é necessária. Para parar, use `Ctrl+C` e depois `docker compose down`.
+
+Os dados e bancos SQLite de cada servidor ficam na pasta `dados/<nome_do_servidor>/` do host. Para começar do zero, apague a pasta `dados/`.
 
 ## Arquitetura
 
-```mermaid
+mermaid
 flowchart LR
-  subgraph Bots
-    BP1[bot_py_1] & BP2[bot_py_2] & BC1[bot_c_1] & BC2[bot_c_2]
-  end
-  B["broker<br/>ROUTER :5555 / DEALER :5556"]
-  subgraph Servidores
-    SP1[servidor_py_1] & SP2[servidor_py_2] & SC1[servidor_c_1] & SC2[servidor_c_2]
-  end
-  BP1 & BP2 & BC1 & BC2 -- REQ --> B
-  B -- REP --> SP1 & SP2 & SC1 & SC2
-```
+  subgraph Bots
+    BP1[bot_py_1] & BP2[bot_py_2] & BC1[bot_c_1] & BC2[bot_c_2]
+  end
+  B["broker<br/>ROUTER :5555 / DEALER :5556"]
+  subgraph Servidores
+    SP1[servidor_py_1] & SP2[servidor_py_2] & SC1[servidor_c_1] & SC2[servidor_c_2]
+  end
+  BP1 & BP2 & BC1 & BC2 -- REQ --> B
+  B -- REP --> SP1 & SP2 & SC1 & SC2
 
-- **broker** (`broker/broker.py`): é o mesmo modelo da aula de Request-Reply. Os bots se conectam com `REQ` na porta 5555 (`ROUTER`) e os servidores com `REP` na porta 5556 (`DEALER`). O `DEALER` distribui as requisições entre os servidores por round-robin, então qualquer bot conversa com qualquer servidor, de qualquer linguagem.
-- **servidores** (`python/servidor.py` e `c/servidor.c`): recebem a requisição, validam, gravam em disco e respondem.
-- **bots** (`python/cliente.py` e `c/cliente.c`): fazem login e depois ficam em loop listando canais e criando um canal novo quando existem menos de 5.
-
-Toda a comunicação usa ZeroMQ e a rede criada pelo Docker Compose. Os hosts são os nomes dos serviços: `broker`.
+- **broker** (`broker/broker.py`): modelo Request-Reply. Os bots se conectam com `REQ` na porta 5555 (`ROUTER`) e os servidores com `REP` na porta 5556 (`DEALER`). O `DEALER` distribui as requisições entre os servidores por *round-robin*.
+- **proxy** (`proxy/proxy.py`): gerencia o padrão PUB/SUB (portas 5557 e 5558) para broadcast de publicações nos canais, anúncios de coordenadores e replicação de dados entre os nós.
+- **referência** (`referencia/referencia.py`): centraliza a atribuição de ranks iniciais aos servidores, listagem de nós ativos e serviço de heartbeat (porta 5559).
+- **servidores** (`python/servidor.py` e `c/servidor.c`): atendem requisições, executam eleições, sincronizam relógios via Berkeley, persistem em SQLite e replicam dados.
+- **bots** (`python/cliente.py` e `c/cliente.c`): fazem login, criam/listam canais e publicam mensagens ciclicamente.
 
 ## Escolhas do projeto
 
 ### Linguagens
-- **Python**: biblioteca `pyzmq`, a mesma usada nas aulas.
-- **C**: `libzmq` (API C do ZeroMQ) e `protobuf-c`. C foi a outra linguagem usada nas aulas (MPI). O código não usa orientação a objetos.
+- **Python**: biblioteca `pyzmq`.
+- **C**: `libzmq` e `protobuf-c`.
 
-As duas implementações seguem exatamente o mesmo protocolo e o mesmo formato de exibição. Por isso um bot em C pode ser atendido por um servidor em Python e o contrário também.
+As duas implementações seguem exatamente o mesmo protocolo Protobuf, permitindo interoperabilidade total entre nós Python e C.
 
 ### Serialização: Protocol Buffers
-As mensagens são serializadas em binário com **Protobuf**, que foi o formato visto na aula de RPC. A definição fica em `proto/mensagens.proto` e é compilada durante o build da imagem:
-- Python: `python -m grpc_tools.protoc --python_out=. mensagens.proto` (mesmo comando da aula de RPC);
-- C: `protoc-c --c_out=. mensagens.proto`.
+As mensagens são serializadas em binário com **Protobuf** (`proto/mensagens.proto`), compilado automaticamente no build dos containers. O protocolo contempla requisições de clientes, respostas, publicações, mensagens de controle de referência, eleições, sincronização de relógio e o canal de replicação.
 
-```proto
-message Requisicao {
-  string operacao  = 1;  // "login" | "criar_canal" | "listar_canais"
-  string usuario   = 2;
-  string canal     = 3;
-  int64  timestamp = 4;  // timestamp do envio (ms desde a época Unix)
-}
+### Persistência e Replicação (Parte 5)
+Cada servidor possui o seu próprio arquivo de banco de dados relacional **SQLite** (`/data/atlas.db`), além de manter compatibilidade com arquivos TSV para histórico textual. 
 
-message Resposta {
-  string operacao        = 1;
-  bool   sucesso         = 2;
-  string erro            = 3;
-  repeated string canais = 4;  // lista de canais (somente nomes)
-  string servidor        = 5;
-  int64  timestamp       = 6;  // timestamp do envio
-}
-```
+Para solucionar o problema do balanceamento por *round-robin* (onde cada servidor receberia apenas uma parte dos dados), implementamos **replicação ativa em tempo real**:
+- Toda operação de escrita (`login`, `criar_canal` ou `publicar`) validada por um servidor é imediatamente gravada no seu SQLite local e difundida para os demais servidores através de um tópico PUB/SUB dedicado (`"replica"`).
+- Ao receber a mensagem de replicação, os outros servidores atualizam os seus bancos SQLite locais. Desse modo, **todos os servidores possuem cópias idênticas e completas de todos os dados**, garantindo consistência e tolerância a falhas.
 
-Todas as mensagens levam o **timestamp do envio**, em milissegundos desde 1970-01-01 UTC. O campo `servidor` mostra qual servidor atendeu, o que ajuda a ver o balanceamento entre Python e C.
-
-### Trocas de mensagem
-
-| Operação | Requisição (REQ) | Resposta (REP) |
-|---|---|---|
-| Login | `operacao=login`, `usuario` | `sucesso` ou `erro` |
-| Criar canal | `operacao=criar_canal`, `usuario`, `canal` | `sucesso` ou `erro` |
-| Listar canais | `operacao=listar_canais`, `usuario` | `canais` = lista com os nomes |
-
-Cada requisição recebe exatamente uma resposta, como manda o padrão REQ/REP.
-
-### Erros e regras definidas pelo grupo
-- **Nome de usuário**: de 1 a 32 caracteres `[A-Za-z0-9_-]`. Sem senha. Um mesmo usuário pode fazer login de novo, por exemplo quando o bot reinicia, e cada login é registrado. Erro: `nome de usuario invalido`.
-- **Nome de canal**: de 1 a 32 caracteres `[a-z0-9_-]`. Erros: `nome de canal invalido` e `canal ja existe`, para canais duplicados.
-- **Operação desconhecida ou mensagem mal formada**: o servidor responde mesmo assim, com `sucesso=false` (o socket `REP` sempre precisa responder).
-- **Falha de gravação em disco**: o servidor responde com erro.
-- **Login com erro**: o bot espera 1 s e repete o login até conseguir.
-- **Critério para criar canal**: quando a listagem tem menos de 5 canais, o bot sorteia um nome de uma lista fixa (`geral`, `noticias`, `esportes`...) e pede a criação. Se o canal já existir, o bot apenas mostra o erro e continua.
-
-### Persistência
-Cada servidor tem a sua própria pasta de dados, montada como volume em `/data`. Essa pasta não é compartilhada entre servidores. Os arquivos são texto separado por TAB (TSV), com uma linha por evento e gravação por *append*:
-
-| Arquivo | Colunas |
-|---|---|
-| `logins.tsv` | timestamp (ms), data legível, usuário |
-| `canais.tsv` | timestamp (ms), data legível, canal, usuário que criou |
-
-Escolhemos TSV porque é simples de gravar e ler nas duas linguagens, sem bibliotecas extras, e porque dá para abrir e conferir o arquivo direto. Ao iniciar, o servidor relê `canais.tsv` e recupera os canais criados antes.
-
-Como o broker usa round-robin e ainda não existe replicação (ela vem na parte 5), cada servidor conhece apenas os canais criados por meio dele. Por isso a listagem pode variar conforme o servidor que responde.
-
-### Exibição das mensagens
-Clientes e servidores mostram cada mensagem enviada ou recebida em uma linha com todos os campos:
-
-```
-[2026-10-22 20:02:23.880] bot_c_1        >>> ENVIADO  REQ {operacao: criar_canal, usuario: bot_c_1, canal: off-topic, timestamp: 2026-10-22 20:02:23.880}
-[2026-10-22 20:02:23.888] bot_c_1        <<< RECEBIDO REP {operacao: criar_canal, sucesso: true, servidor: servidor_c_2, timestamp: 2026-10-22 20:02:23.884}
-```
+### Tolerância a Falhas e Relógios
+- **Relógios Lógicos de Lamport**: incrementados a cada envio/recebimento de mensagem para assegurar ordenação causal.
+- **Eleição de Coordenador**: baseada em ranks e mensagens diretas via socket P2P na porta 5560.
+- **Sincronização de Relógio (Berkeley)**: executada periodicamente entre os servidores e o coordenador eleito para ajustar desvios de relógio físico.
 
 ## Estrutura do repositório
 
-```
+
 ├── docker-compose.yaml
-├── proto/mensagens.proto     
-├── broker/broker.py          
-├── python/                 
-│   ├── Dockerfile            
-│   ├── comum.py
-│   ├── servidor.py
-│   └── cliente.py
-└── c/                      
-    ├── Dockerfile
-    ├── Makefile
-    ├── comum.h / comum.c
-    ├── servidor.c
-    └── cliente.c
-```
+├── proto/mensagens.proto     
+├── broker/broker.py
+├── proxy/proxy.py
+├── referencia/referencia.py
+├── python/                 
+│   ├── Dockerfile            
+│   ├── comum.py
+│   ├── servidor.py
+│   └── cliente.py
+└── c/                      
+    ├── Dockerfile
+    ├── Makefile
+    ├── comum.h / comum.c
+    ├── servidor.c
+    └── cliente.c
